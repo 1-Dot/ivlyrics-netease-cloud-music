@@ -1,0 +1,18 @@
+{
+  "addons": [
+    {
+      "name": "NetEase Cloud Music",
+      "type": "lyrics",
+      "author": "1-Dot",
+      "version": "0.1.0",
+      "updated": "2026-05-18",
+      "description": {
+        "en": "Get synced lyrics and official translated lyrics from NetEase Cloud Music.",
+        "zh-CN": "从网易云音乐获取同步歌词和官方翻译歌词。"
+      },
+      "githubUrl": "https://github.com/1-Dot/ivlyrics-netease-cloud-music",
+      "downloadUrl": "https://raw.githubusercontent.com/1-Dot/ivlyrics-netease-cloud-music/main/Addon_Lyrics_Netease.js",
+      "minAppVersion": ""
+    }
+  ]
+}

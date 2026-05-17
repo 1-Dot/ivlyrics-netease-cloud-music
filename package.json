@@ -1,0 +1,10 @@
+{
+  "name": "ivlyrics-netease-cloud-music",
+  "version": "0.1.0",
+  "private": false,
+  "description": "ivLyrics Marketplace lyrics provider for NetEase Cloud Music",
+  "scripts": {
+    "validate": "node scripts/validate.js"
+  },
+  "license": "MIT"
+}
