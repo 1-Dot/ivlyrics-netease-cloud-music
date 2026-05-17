@@ -322,7 +322,8 @@
             const provider = String(payload?.provider || '');
             const wantsTranslation = payload && payload.wantSmartPhonetic !== true;
             const trackId = payload?.trackId || '';
-            if (wantsTranslation && provider === ADDON_ID && translationCache.has(trackId)) {
+            const skipAiNow = getSetting('skip_ai_translation_when_netease_translation_exists', true) !== false;
+            if (skipAiNow && wantsTranslation && provider === ADDON_ID && translationCache.has(trackId)) {
                 const translation = translationCache.get(trackId) || [];
                 if (translation.some(Boolean)) {
                     return { translation };
