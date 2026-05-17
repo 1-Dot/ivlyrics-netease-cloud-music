@@ -3,7 +3,7 @@
  *
  * @addon-type lyrics
  * @name NetEase Cloud Music
- * @version 0.1.1
+ * @version 0.1.2
  * @supports karaoke: false
  * @supports synced: true
  * @supports unsynced: true
@@ -15,16 +15,18 @@
     const DEFAULT_ADDON_ID = 'netease-cloud-music';
     const ADDON_ID = scriptAddonId || DEFAULT_ADDON_ID;
     const STORAGE_KEY_PREFIX = 'ivLyrics:lyrics:addon:';
+    const TRANSLATION_CACHE_PREFIX = `${STORAGE_KEY_PREFIX}${ADDON_ID}:netease-translation:`;
     const REQUEST_TIMEOUT_MS = 12000;
     const TRANSLATION_TIME_TOLERANCE_MS = 650;
     const REQUIRED_PROXY_ERROR = 'CORS proxy URL is required. NetEase Cloud Music official APIs cannot be read directly from Spotify/Spicetify because of browser CORS restrictions. Please configure a CORS proxy, preferably with a Mainland China exit IP.';
     const translationCache = new Map();
+    let translatorGuardRetryTimer = null;
 
     const ADDON_INFO = {
         id: ADDON_ID,
         name: 'NetEase Cloud Music',
         author: '1-Dot',
-        version: '0.1.1',
+        version: '0.1.2',
         description: {
             en: 'Get synced lyrics and official translated lyrics from NetEase Cloud Music. A CORS proxy is required.',
             'zh-CN': '从网易云音乐获取同步歌词和官方翻译歌词。必须配置 CORS 代理。'
@@ -35,7 +37,7 @@
             unsynced: true
         },
         useIvLyricsSync: true,
-        cacheVersion: 2,
+        cacheVersion: 3,
         icon: 'M12 2C7.03 2 3 6.03 3 11c0 2.4 1.2 4.52 3.03 5.79A4 4 0 0 1 10 13h4a4 4 0 0 1 3.97 3.79A6.98 6.98 0 0 0 21 11c0-4.97-4.03-9-9-9zm0 3a6 6 0 0 1 6 6c0 .68-.11 1.34-.32 1.95A6.96 6.96 0 0 0 14 12h-4a6.96 6.96 0 0 0-3.68.95A6 6 0 0 1 12 5zm-2 10h4a2 2 0 1 1 0 4h-4a2 2 0 1 1 0-4z'
     };
 
@@ -93,6 +95,11 @@
 
     function getTrackId(info) {
         return info?.trackId || info?.uri?.split(':')?.[2] || info?.uri || '';
+    }
+
+    function getCurrentTrackKeys() {
+        const uri = Spicetify?.Player?.data?.item?.uri || '';
+        return [uri?.split(':')?.[2], uri].filter(Boolean);
     }
 
     function getCandidateArtists(song) {
@@ -271,6 +278,25 @@
             });
     }
 
+    function isLeadingCreditText(text) {
+        const normalized = String(text || '')
+            .normalize('NFKC')
+            .replace(/\s+/g, '')
+            .replace(/[：:]/g, ':');
+
+        if (!normalized) return true;
+
+        return /^(作词|作詞|词|詞|填词|填詞|作曲|曲|编曲|編曲|制作人|製作人|制片人|製片人|监制|監製|出品|发行|發行|唱片公司|OP|SP|企划|企劃|统筹|統籌|录音|錄音|混音|母带|母帶|和声|和聲|吉他|贝斯|貝斯|鼓|键盘|鍵盤|弦乐|弦樂|配唱|人声编辑|人聲編輯|音频编辑|音頻編輯|录音室|錄音室|混音室|母带室|母帶室|版权|版權|Lyrics(?:by)?|Lyricist|Composer|Composedby|Arranger|Producer|Producedby|Mixing|Mixedby|Mastering|Masteredby|Recording|Recordedby|Vocals?|Guitars?|Bass|Drums?|Keyboard|Publisher|Copyright|Label)[:：／/|-]/i.test(normalized);
+    }
+
+    function trimLeadingCreditLines(lines) {
+        const cleaned = [...(lines || [])];
+        while (cleaned.length && isLeadingCreditText(cleaned[0].text)) {
+            cleaned.shift();
+        }
+        return cleaned;
+    }
+
     function mergeTranslatedLines(baseLines, translatedLines) {
         if (!baseLines?.length || !translatedLines?.length) return baseLines || [];
 
@@ -309,38 +335,103 @@
         });
     }
 
-    function rememberTranslations(trackId, lines) {
-        if (!trackId) return;
-        const translations = (lines || []).map(line => line.text2 || line.translation || line.translationText || '');
-        if (translations.some(Boolean)) {
-            translationCache.set(trackId, translations);
-            if (translationCache.size > 50) {
-                const firstKey = translationCache.keys().next().value;
-                translationCache.delete(firstKey);
+    function persistTranslations(trackId, translations) {
+        if (!trackId || !translations?.some(Boolean)) return;
+        try {
+            Spicetify?.LocalStorage?.set(`${TRANSLATION_CACHE_PREFIX}${trackId}`, JSON.stringify(translations));
+        } catch {
+            try {
+                localStorage.setItem(`${TRANSLATION_CACHE_PREFIX}${trackId}`, JSON.stringify(translations));
+            } catch {
+                // Ignore storage errors; in-memory cache still works for the current session.
             }
         }
     }
 
+    function readPersistedTranslations(trackId) {
+        if (!trackId) return null;
+        let raw = null;
+        try {
+            raw = Spicetify?.LocalStorage?.get(`${TRANSLATION_CACHE_PREFIX}${trackId}`);
+        } catch {
+            raw = null;
+        }
+        if (raw === null || raw === undefined) {
+            try {
+                raw = localStorage.getItem(`${TRANSLATION_CACHE_PREFIX}${trackId}`);
+            } catch {
+                raw = null;
+            }
+        }
+        if (!raw) return null;
+        try {
+            const parsed = JSON.parse(raw);
+            return Array.isArray(parsed) && parsed.some(Boolean) ? parsed : null;
+        } catch {
+            return null;
+        }
+    }
+
+    function rememberTranslations(trackIds, lines) {
+        const ids = Array.isArray(trackIds) ? trackIds : [trackIds];
+        const translations = (lines || []).map(line => line.text2 || line.translation || line.translationText || '');
+        if (translations.some(Boolean)) {
+            for (const trackId of ids.filter(Boolean)) {
+                translationCache.set(trackId, translations);
+                persistTranslations(trackId, translations);
+                if (translationCache.size > 50) {
+                    const firstKey = translationCache.keys().next().value;
+                    translationCache.delete(firstKey);
+                }
+            }
+        }
+    }
+
+    function getRememberedTranslations(keys) {
+        for (const key of keys.filter(Boolean)) {
+            if (translationCache.has(key)) {
+                const translation = translationCache.get(key);
+                if (translation?.some(Boolean)) return translation;
+            }
+            const persisted = readPersistedTranslations(key);
+            if (persisted?.some(Boolean)) {
+                translationCache.set(key, persisted);
+                return persisted;
+            }
+        }
+        return null;
+    }
+
     function installTranslatorGuard() {
         const guardEnabled = getSetting('skip_ai_translation_when_netease_translation_exists', true) !== false;
-        if (!guardEnabled || !window.Translator || typeof window.Translator.callGemini !== 'function') return;
-        if (window.Translator.__ivLyricsNeteaseGuardInstalled) return;
+        if (!guardEnabled) return;
+        if (!window.Translator || typeof window.Translator.callGemini !== 'function') {
+            if (!translatorGuardRetryTimer) {
+                translatorGuardRetryTimer = setTimeout(() => {
+                    translatorGuardRetryTimer = null;
+                    installTranslatorGuard();
+                }, 300);
+            }
+            return;
+        }
+        if (window.Translator.__ivLyricsNeteaseGuardVersion === ADDON_INFO.version) return;
 
         const originalCallGemini = window.Translator.callGemini.bind(window.Translator);
         window.Translator.callGemini = async function guardedCallGemini(payload) {
             const provider = String(payload?.provider || '');
             const wantsTranslation = payload && payload.wantSmartPhonetic !== true;
-            const trackId = payload?.trackId || '';
             const skipAiNow = getSetting('skip_ai_translation_when_netease_translation_exists', true) !== false;
-            if (skipAiNow && wantsTranslation && provider === ADDON_ID && translationCache.has(trackId)) {
-                const translation = translationCache.get(trackId) || [];
-                if (translation.some(Boolean)) {
+            if (skipAiNow && wantsTranslation && provider === ADDON_ID) {
+                const keys = [payload?.trackId, payload?.uri, ...getCurrentTrackKeys()];
+                const translation = getRememberedTranslations(keys);
+                if (translation?.some(Boolean)) {
                     return { translation };
                 }
             }
             return originalCallGemini(payload);
         };
         window.Translator.__ivLyricsNeteaseGuardInstalled = true;
+        window.Translator.__ivLyricsNeteaseGuardVersion = ADDON_INFO.version;
     }
 
     function createSettingsUI() {
@@ -513,18 +604,19 @@
                 return result;
             }
 
-            let synced = parseLrc(lrcRaw);
+            let synced = trimLeadingCreditLines(parseLrc(lrcRaw));
             if (!synced.length) {
-                result.unsynced = String(lrcRaw)
+                result.unsynced = trimLeadingCreditLines(String(lrcRaw)
                     .split(/\r?\n/)
                     .map(text => ({ text: text.replace(/\[[^\]]+\]/g, '').trim() }))
+                    .filter(line => line.text))
                     .filter(line => line.text);
             } else {
                 const useTranslation = getSetting('enable_netease_translation', true) !== false;
                 if (useTranslation) {
-                    const translated = parseLrc(lyricData?.tlyric?.lyric || '');
+                    const translated = trimLeadingCreditLines(parseLrc(lyricData?.tlyric?.lyric || ''));
                     synced = mergeTranslatedLines(synced, translated);
-                    rememberTranslations(getTrackId(info), synced);
+                    rememberTranslations([getTrackId(info), info.uri], synced);
                 }
                 result.synced = synced;
                 result.unsynced = linesToUnsynced(synced);

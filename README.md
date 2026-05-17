@@ -10,8 +10,9 @@ An ivLyrics Marketplace addon that searches NetEase Cloud Music, fetches synced 
 - Scores candidates by title, artist, album, and duration.
 - Fetches original lyrics from `lrc.lyric`.
 - Fetches translated lyrics from `tlyric.lyric`.
+- Removes leading NetEase credit lines such as `作词: ...`, `作曲: ...`, arranger, producer, label, and similar metadata before returning lyrics to ivLyrics.
 - Merges translation lines into ivLyrics `text2` fields.
-- Intercepts ivLyrics AI translation calls for this provider when a NetEase translation is already available, so matched songs do not spend AI translation requests.
+- Intercepts ivLyrics AI translation calls for this provider when a NetEase translation is already available, including after ivLyrics serves lyrics from cache, so matched songs do not spend AI translation requests.
 
 It does not implement word-by-word karaoke lyrics. ivLyrics can still synthesize pseudo karaoke from line-synced lyrics when configured.
 
