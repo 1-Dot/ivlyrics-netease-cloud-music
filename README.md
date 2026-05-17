@@ -13,6 +13,7 @@ An ivLyrics Marketplace addon that searches NetEase Cloud Music, fetches synced 
 - Removes leading NetEase credit lines such as `作词: ...`, `作曲: ...`, arranger, producer, label, and similar metadata before returning lyrics to ivLyrics.
 - Merges translation lines into ivLyrics `text2` fields.
 - Intercepts ivLyrics AI translation calls for this provider when a NetEase translation is already available, including after ivLyrics serves lyrics from cache, so matched songs do not spend AI translation requests.
+- Intercepts ivLyrics phonetic requests for this provider and generates local romanization instead of using AI. Japanese uses Kuroshiro/Kuromoji Hepburn romaji, Korean uses Aromanize RR, and Chinese uses pinyin. NetEase phonetic data is not used.
 
 It does not implement word-by-word karaoke lyrics. ivLyrics can still synthesize pseudo karaoke from line-synced lyrics when configured.
 
@@ -83,6 +84,9 @@ The addon exposes these settings inside ivLyrics lyrics provider settings:
 - Minimum match score: stricter values reduce false matches.
 - Use NetEase translated lyrics: merge `tlyric` into displayed translation.
 - Skip AI translation when NetEase translation exists: returns cached `tlyric` to ivLyrics translation flow instead of calling AI.
+- Use local romanization instead of AI phonetic generation: enabled by default.
+- Local romanization language: auto detect, Japanese romaji, Korean romaja, or Chinese pinyin.
+- Allow AI fallback if local romanization fails: disabled by default, so phonetic requests do not call AI.
 
 ## Development
 

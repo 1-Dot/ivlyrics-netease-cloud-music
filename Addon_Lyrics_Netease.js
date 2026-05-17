@@ -3,7 +3,7 @@
  *
  * @addon-type lyrics
  * @name NetEase Cloud Music
- * @version 0.1.2
+ * @version 0.1.3
  * @supports karaoke: false
  * @supports synced: true
  * @supports unsynced: true
@@ -16,6 +16,7 @@
     const ADDON_ID = scriptAddonId || DEFAULT_ADDON_ID;
     const STORAGE_KEY_PREFIX = 'ivLyrics:lyrics:addon:';
     const TRANSLATION_CACHE_PREFIX = `${STORAGE_KEY_PREFIX}${ADDON_ID}:netease-translation:`;
+    const PHONETIC_CACHE_PREFIX = `${STORAGE_KEY_PREFIX}${ADDON_ID}:local-phonetic:`;
     const REQUEST_TIMEOUT_MS = 12000;
     const TRANSLATION_TIME_TOLERANCE_MS = 650;
     const REQUIRED_PROXY_ERROR = 'CORS proxy URL is required. NetEase Cloud Music official APIs cannot be read directly from Spotify/Spicetify because of browser CORS restrictions. Please configure a CORS proxy, preferably with a Mainland China exit IP.';
@@ -26,7 +27,7 @@
         id: ADDON_ID,
         name: 'NetEase Cloud Music',
         author: '1-Dot',
-        version: '0.1.2',
+        version: '0.1.3',
         description: {
             en: 'Get synced lyrics and official translated lyrics from NetEase Cloud Music. A CORS proxy is required.',
             'zh-CN': '从网易云音乐获取同步歌词和官方翻译歌词。必须配置 CORS 代理。'
@@ -37,7 +38,7 @@
             unsynced: true
         },
         useIvLyricsSync: true,
-        cacheVersion: 3,
+        cacheVersion: 4,
         icon: 'M12 2C7.03 2 3 6.03 3 11c0 2.4 1.2 4.52 3.03 5.79A4 4 0 0 1 10 13h4a4 4 0 0 1 3.97 3.79A6.98 6.98 0 0 0 21 11c0-4.97-4.03-9-9-9zm0 3a6 6 0 0 1 6 6c0 .68-.11 1.34-.32 1.95A6.96 6.96 0 0 0 14 12h-4a6.96 6.96 0 0 0-3.68.95A6 6 0 0 1 12 5zm-2 10h4a2 2 0 1 1 0 4h-4a2 2 0 1 1 0-4z'
     };
 
@@ -83,6 +84,16 @@
         return normalizeText(value).replace(/\s+/g, '');
     }
 
+    function hashText(value) {
+        const text = String(value || '');
+        let hash = 2166136261;
+        for (let i = 0; i < text.length; i++) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0).toString(36);
+    }
+
     function splitArtists(value) {
         if (Array.isArray(value)) {
             return value.map(v => typeof v === 'string' ? v : v?.name).filter(Boolean);
@@ -100,6 +111,17 @@
     function getCurrentTrackKeys() {
         const uri = Spicetify?.Player?.data?.item?.uri || '';
         return [uri?.split(':')?.[2], uri].filter(Boolean);
+    }
+
+    function detectRomanizationLanguage(text) {
+        const mode = String(getSetting('local_phonetic_language', 'auto') || 'auto');
+        if (mode !== 'auto') return mode;
+
+        const content = String(text || '');
+        if (/[\u3040-\u30ff]/.test(content)) return 'ja';
+        if (/[\uac00-\ud7af]/.test(content)) return 'ko';
+        if (/[\u3400-\u9fff]/.test(content)) return 'zh';
+        return 'unsupported';
     }
 
     function getCandidateArtists(song) {
@@ -402,9 +424,100 @@
         return null;
     }
 
+    function readPersistedPhonetic(trackId, textHash) {
+        if (!trackId || !textHash) return null;
+        let raw = null;
+        try {
+            raw = Spicetify?.LocalStorage?.get(`${PHONETIC_CACHE_PREFIX}${trackId}`);
+        } catch {
+            raw = null;
+        }
+        if (raw === null || raw === undefined) {
+            try {
+                raw = localStorage.getItem(`${PHONETIC_CACHE_PREFIX}${trackId}`);
+            } catch {
+                raw = null;
+            }
+        }
+        if (!raw) return null;
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed?.hash === textHash && Array.isArray(parsed.phonetic) && parsed.phonetic.some(Boolean)) {
+                return parsed.phonetic;
+            }
+        } catch {
+            return null;
+        }
+        return null;
+    }
+
+    function persistPhonetic(trackIds, textHash, phonetic) {
+        if (!textHash || !phonetic?.some(Boolean)) return;
+        const payload = JSON.stringify({ hash: textHash, phonetic });
+        for (const trackId of (Array.isArray(trackIds) ? trackIds : [trackIds]).filter(Boolean)) {
+            try {
+                Spicetify?.LocalStorage?.set(`${PHONETIC_CACHE_PREFIX}${trackId}`, payload);
+            } catch {
+                try {
+                    localStorage.setItem(`${PHONETIC_CACHE_PREFIX}${trackId}`, payload);
+                } catch {
+                    // Ignore storage errors; the generated value is still returned for this request.
+                }
+            }
+        }
+    }
+
+    async function generateLocalPhoneticLines(text) {
+        if (!window.Translator) {
+            throw new Error('Translator is not available');
+        }
+
+        const sourceText = String(text || '');
+        const lines = sourceText.split(/\r?\n/);
+        const language = detectRomanizationLanguage(sourceText);
+        if (language === 'unsupported') {
+            return lines.map(() => '');
+        }
+
+        const translator = new window.Translator(language === 'zh' ? 'zh-hans' : language);
+
+        if (language === 'ja') {
+            return Promise.all(lines.map(line => translator.romajifyText(line || '', 'romaji', 'spaced')));
+        }
+        if (language === 'ko') {
+            return Promise.all(lines.map(line => translator.convertToRomaja(line || '', 'romaja')));
+        }
+        if (language === 'zh') {
+            return Promise.all(lines.map(line => translator.convertToPinyin(line || '', {
+                toneType: getSetting('local_phonetic_pinyin_tone', 'mark') || 'mark',
+                type: 'string'
+            })));
+        }
+
+        return lines.map(() => '');
+    }
+
+    async function getLocalPhonetic(payload) {
+        const text = String(payload?.text || '');
+        const textHash = hashText(text);
+        const keys = [payload?.trackId, payload?.uri, ...getCurrentTrackKeys()];
+
+        for (const key of keys.filter(Boolean)) {
+            const cached = readPersistedPhonetic(key, textHash);
+            if (cached) return cached;
+        }
+
+        const phonetic = await generateLocalPhoneticLines(text);
+        if (phonetic?.some(Boolean)) {
+            persistPhonetic(keys, textHash, phonetic);
+        }
+        return phonetic;
+    }
+
     function installTranslatorGuard() {
         const guardEnabled = getSetting('skip_ai_translation_when_netease_translation_exists', true) !== false;
-        if (!guardEnabled) return;
+        const localPhoneticEnabled = getSetting('enable_local_phonetic', true) !== false;
+        if (!guardEnabled && !localPhoneticEnabled) return;
         if (!window.Translator || typeof window.Translator.callGemini !== 'function') {
             if (!translatorGuardRetryTimer) {
                 translatorGuardRetryTimer = setTimeout(() => {
@@ -419,7 +532,24 @@
         const originalCallGemini = window.Translator.callGemini.bind(window.Translator);
         window.Translator.callGemini = async function guardedCallGemini(payload) {
             const provider = String(payload?.provider || '');
+            const wantsPhonetic = payload && payload.wantSmartPhonetic === true;
             const wantsTranslation = payload && payload.wantSmartPhonetic !== true;
+            const localPhoneticNow = getSetting('enable_local_phonetic', true) !== false;
+
+            if (localPhoneticNow && wantsPhonetic && provider === ADDON_ID) {
+                try {
+                    const phonetic = await getLocalPhonetic(payload);
+                    return { phonetic };
+                } catch (error) {
+                    console.warn('[NetEase Lyrics Addon] Local romanization failed:', error);
+                    const allowAiFallback = getSetting('local_phonetic_fallback_to_ai', false) === true;
+                    if (!allowAiFallback) {
+                        const fallbackLines = String(payload?.text || '').split(/\r?\n/).map(() => '');
+                        return { phonetic: fallbackLines };
+                    }
+                }
+            }
+
             const skipAiNow = getSetting('skip_ai_translation_when_netease_translation_exists', true) !== false;
             if (skipAiNow && wantsTranslation && provider === ADDON_ID) {
                 const keys = [payload?.trackId, payload?.uri, ...getCurrentTrackKeys()];
@@ -442,6 +572,9 @@
             const [proxyUrl, setProxyUrl] = React.useState(String(getSetting('proxy_url', '') || ''));
             const [enableTranslation, setEnableTranslation] = React.useState(getSetting('enable_netease_translation', true) !== false);
             const [skipAiTranslation, setSkipAiTranslation] = React.useState(getSetting('skip_ai_translation_when_netease_translation_exists', true) !== false);
+            const [enableLocalPhonetic, setEnableLocalPhonetic] = React.useState(getSetting('enable_local_phonetic', true) !== false);
+            const [localPhoneticLanguage, setLocalPhoneticLanguage] = React.useState(String(getSetting('local_phonetic_language', 'auto') || 'auto'));
+            const [localPhoneticFallbackToAi, setLocalPhoneticFallbackToAi] = React.useState(getSetting('local_phonetic_fallback_to_ai', false) === true);
 
             const saveNumber = (key, value, min, max, setter) => {
                 setter(value);
@@ -525,6 +658,51 @@
                         ' Skip AI translation when NetEase translation exists'
                     ),
                     React.createElement('small', null, 'This intercepts ivLyrics translation requests only for this provider and only when tlyric was fetched.')
+                ),
+                React.createElement('div', { className: 'ai-addon-setting' },
+                    React.createElement('label', null,
+                        React.createElement('input', {
+                            type: 'checkbox',
+                            checked: enableLocalPhonetic,
+                            onChange: e => {
+                                setEnableLocalPhonetic(e.target.checked);
+                                setSetting('enable_local_phonetic', e.target.checked);
+                                installTranslatorGuard();
+                            }
+                        }),
+                        ' Use local romanization instead of AI phonetic generation'
+                    ),
+                    React.createElement('small', null, 'Japanese uses Kuroshiro/Kuromoji Hepburn romaji, Korean uses Aromanize RR, and Chinese uses pinyin. NetEase phonetic data is not used.')
+                ),
+                React.createElement('div', { className: 'ai-addon-setting' },
+                    React.createElement('label', null, 'Local romanization language'),
+                    React.createElement('select', {
+                        value: localPhoneticLanguage,
+                        onChange: e => {
+                            setLocalPhoneticLanguage(e.target.value);
+                            setSetting('local_phonetic_language', e.target.value);
+                        }
+                    },
+                        React.createElement('option', { value: 'auto' }, 'Auto detect'),
+                        React.createElement('option', { value: 'ja' }, 'Japanese romaji'),
+                        React.createElement('option', { value: 'ko' }, 'Korean romaja'),
+                        React.createElement('option', { value: 'zh' }, 'Chinese pinyin')
+                    ),
+                    React.createElement('small', null, 'Use a fixed language if auto detection chooses the wrong converter for mixed-language songs.')
+                ),
+                React.createElement('div', { className: 'ai-addon-setting' },
+                    React.createElement('label', null,
+                        React.createElement('input', {
+                            type: 'checkbox',
+                            checked: localPhoneticFallbackToAi,
+                            onChange: e => {
+                                setLocalPhoneticFallbackToAi(e.target.checked);
+                                setSetting('local_phonetic_fallback_to_ai', e.target.checked);
+                            }
+                        }),
+                        ' Allow AI fallback if local romanization fails'
+                    ),
+                    React.createElement('small', null, 'Off by default. When off, local failures return empty phonetic lines and do not call AI.')
                 )
             );
         };
