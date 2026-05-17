@@ -3,7 +3,7 @@
  *
  * @addon-type lyrics
  * @name NetEase Cloud Music
- * @version 0.1.0
+ * @version 0.1.1
  * @supports karaoke: false
  * @supports synced: true
  * @supports unsynced: true
@@ -17,16 +17,17 @@
     const STORAGE_KEY_PREFIX = 'ivLyrics:lyrics:addon:';
     const REQUEST_TIMEOUT_MS = 12000;
     const TRANSLATION_TIME_TOLERANCE_MS = 650;
+    const REQUIRED_PROXY_ERROR = 'CORS proxy URL is required. NetEase Cloud Music official APIs cannot be read directly from Spotify/Spicetify because of browser CORS restrictions. Please configure a CORS proxy, preferably with a Mainland China exit IP.';
     const translationCache = new Map();
 
     const ADDON_INFO = {
         id: ADDON_ID,
         name: 'NetEase Cloud Music',
         author: '1-Dot',
-        version: '0.1.0',
+        version: '0.1.1',
         description: {
-            en: 'Get synced lyrics and official translated lyrics from NetEase Cloud Music.',
-            'zh-CN': '从网易云音乐获取同步歌词和官方翻译歌词。'
+            en: 'Get synced lyrics and official translated lyrics from NetEase Cloud Music. A CORS proxy is required.',
+            'zh-CN': '从网易云音乐获取同步歌词和官方翻译歌词。必须配置 CORS 代理。'
         },
         supports: {
             karaoke: false,
@@ -34,7 +35,7 @@
             unsynced: true
         },
         useIvLyricsSync: true,
-        cacheVersion: 1,
+        cacheVersion: 2,
         icon: 'M12 2C7.03 2 3 6.03 3 11c0 2.4 1.2 4.52 3.03 5.79A4 4 0 0 1 10 13h4a4 4 0 0 1 3.97 3.79A6.98 6.98 0 0 0 21 11c0-4.97-4.03-9-9-9zm0 3a6 6 0 0 1 6 6c0 .68-.11 1.34-.32 1.95A6.96 6.96 0 0 0 14 12h-4a6.96 6.96 0 0 0-3.68.95A6 6 0 0 1 12 5zm-2 10h4a2 2 0 1 1 0 4h-4a2 2 0 1 1 0-4z'
     };
 
@@ -59,6 +60,10 @@
         if (manager()?.setAddonSetting) {
             manager().setAddonSetting(ADDON_ID, key, value);
         }
+    }
+
+    function getProxyUrl() {
+        return String(getSetting('proxy_url', '') || '').trim();
     }
 
     function normalizeText(value) {
@@ -172,14 +177,18 @@
     }
 
     function proxiedUrl(url) {
-        const proxy = String(getSetting('proxy_url', '') || '').trim();
-        if (!proxy) return url;
+        const proxy = getProxyUrl();
         const encoded = encodeURIComponent(url);
         if (proxy.includes('{url}')) return proxy.replace('{url}', encoded);
         return proxy + encoded;
     }
 
     async function fetchJson(url) {
+        const proxy = getProxyUrl();
+        if (!proxy) {
+            throw new Error(REQUIRED_PROXY_ERROR);
+        }
+
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         try {
@@ -350,6 +359,33 @@
             };
 
             return React.createElement('div', { className: 'ai-addon-settings netease-settings' },
+                React.createElement('div', {
+                    className: 'ai-addon-setting',
+                    style: {
+                        padding: '12px',
+                        borderRadius: '8px',
+                        background: 'rgba(255, 193, 7, 0.12)',
+                        border: '1px solid rgba(255, 193, 7, 0.45)'
+                    }
+                },
+                    React.createElement('strong', null, 'CORS proxy is required'),
+                    React.createElement('p', { style: { margin: '6px 0 0' } },
+                        'NetEase Cloud Music official APIs cannot be read directly from Spotify/Spicetify due to browser CORS restrictions. This addon will not work until you configure a CORS proxy. The proxy should return the raw NetEase JSON response and should preferably use a Mainland China exit IP.'
+                    )
+                ),
+                React.createElement('div', { className: 'ai-addon-setting' },
+                    React.createElement('label', null, 'CORS proxy URL (required)'),
+                    React.createElement('input', {
+                        type: 'text',
+                        value: proxyUrl,
+                        placeholder: 'https://your-proxy.example/raw?url=',
+                        onChange: e => {
+                            setProxyUrl(e.target.value);
+                            setSetting('proxy_url', e.target.value);
+                        }
+                    }),
+                    React.createElement('small', null, 'Required. Use {url} placeholder if your proxy needs it. Without this value, the provider intentionally returns an error instead of trying direct requests.')
+                ),
                 React.createElement('div', { className: 'ai-addon-setting' },
                     React.createElement('label', null, 'Search result limit'),
                     React.createElement('input', {
@@ -398,19 +434,6 @@
                         ' Skip AI translation when NetEase translation exists'
                     ),
                     React.createElement('small', null, 'This intercepts ivLyrics translation requests only for this provider and only when tlyric was fetched.')
-                ),
-                React.createElement('div', { className: 'ai-addon-setting' },
-                    React.createElement('label', null, 'CORS proxy URL (optional)'),
-                    React.createElement('input', {
-                        type: 'text',
-                        value: proxyUrl,
-                        placeholder: 'https://your-proxy.example/raw?url=',
-                        onChange: e => {
-                            setProxyUrl(e.target.value);
-                            setSetting('proxy_url', e.target.value);
-                        }
-                    }),
-                    React.createElement('small', null, 'Leave empty for direct requests. Use {url} placeholder if your proxy needs it.')
                 )
             );
         };
@@ -434,6 +457,7 @@
             const result = {
                 uri: info.uri,
                 provider: ADDON_ID,
+                cacheVersion: ADDON_INFO.cacheVersion,
                 karaoke: null,
                 synced: null,
                 unsynced: null,
@@ -441,6 +465,12 @@
                 error: null,
                 netease: null
             };
+
+            if (!getProxyUrl()) {
+                result.error = REQUIRED_PROXY_ERROR;
+                result.skipCache = true;
+                return result;
+            }
 
             let songs;
             try {
