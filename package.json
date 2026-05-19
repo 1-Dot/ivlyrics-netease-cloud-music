@@ -1,6 +1,6 @@
 {
   "name": "ivlyrics-netease-cloud-music",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": false,
   "description": "ivLyrics Marketplace lyrics provider for NetEase Cloud Music",
   "scripts": {

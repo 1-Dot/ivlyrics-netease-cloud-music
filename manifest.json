@@ -4,8 +4,8 @@
       "name": "NetEase Cloud Music",
       "type": "lyrics",
       "author": "1-Dot",
-      "version": "0.1.3",
-      "updated": "2026-05-18",
+      "version": "0.1.4",
+      "updated": "2026-05-19",
       "description": {
         "en": "Get synced lyrics and official translated lyrics from NetEase Cloud Music. A CORS proxy is required.",
         "zh-CN": "从网易云音乐获取同步歌词和官方翻译歌词。必须配置 CORS 代理。"
