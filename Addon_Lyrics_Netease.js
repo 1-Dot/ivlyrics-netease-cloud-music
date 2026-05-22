@@ -3,7 +3,7 @@
  *
  * @addon-type lyrics
  * @name NetEase Cloud Music
- * @version 0.1.6
+ * @version 0.1.7
  * @supports karaoke: false
  * @supports synced: true
  * @supports unsynced: true
@@ -22,7 +22,8 @@
   const REQUEST_TIMEOUT_MS = 12000;
   const TRANSLATION_TIME_TOLERANCE_MS = 650;
 
-  const PUBLIC_NODE_API_HOST = "netease.happyking.top";
+  const REQUIRED_PROXY_ERROR =
+    "CORS proxy URL is required. Configure a proxy that returns raw JSON from official music.163.com APIs.";
 
   const translationCache = new Map();
   let translatorGuardRetryTimer = null;
@@ -31,11 +32,11 @@
     id: ADDON_ID,
     name: "NetEase Cloud Music",
     author: "1-Dot",
-    version: "0.1.5",
+    version: "0.1.7",
     description: {
-      en: "Get synced lyrics and official translated lyrics from NetEase Cloud Music. Uses the public NeteaseCloudMusicApi mirror at netease.happyking.top by default; configure a CORS proxy to request official NetEase APIs instead.",
+      en: "Get synced lyrics and official translated lyrics from NetEase Cloud Music. A user-provided CORS proxy is required.",
       "zh-CN":
-        "从网易云音乐获取同步歌词和官方翻译歌词。默认使用 netease.happyking.top 这个公开 NeteaseCloudMusicApi 镜像；填写 CORS 代理后改为请求官方网易云接口。",
+        "从网易云音乐获取同步歌词和官方翻译歌词。必须由用户自行填写 CORS 代理。",
     },
     supports: {
       karaoke: false,
@@ -43,7 +44,7 @@
       unsynced: true,
     },
     useIvLyricsSync: true,
-    cacheVersion: 6,
+    cacheVersion: 7,
     icon: "M12 2C7.03 2 3 6.03 3 11c0 2.4 1.2 4.52 3.03 5.79A4 4 0 0 1 10 13h4a4 4 0 0 1 3.97 3.79A6.98 6.98 0 0 0 21 11c0-4.97-4.03-9-9-9zm0 3a6 6 0 0 1 6 6c0 .68-.11 1.34-.32 1.95A6.96 6.96 0 0 0 14 12h-4a6.96 6.96 0 0 0-3.68.95A6 6 0 0 1 12 5zm-2 10h4a2 2 0 1 1 0 4h-4a2 2 0 1 1 0-4z",
   };
 
@@ -237,10 +238,6 @@
     };
   }
 
-  function pickPublicNodeHost() {
-    return PUBLIC_NODE_API_HOST;
-  }
-
   function buildUrl(base, path, params) {
     const url = new URL(`${base}${path}`);
     Object.entries(params || {}).forEach(([key, value]) => {
@@ -253,10 +250,6 @@
 
   function buildOfficialNeteaseUrl(path, params) {
     return buildUrl("https://music.163.com", path, params);
-  }
-
-  function buildPublicNodeUrl(path, params) {
-    return buildUrl(`https://${pickPublicNodeHost()}`, path, params);
   }
 
   function proxiedUrl(url) {
@@ -277,12 +270,12 @@
     return false;
   }
 
-  async function fetchJson(url, { throughProxy = false } = {}) {
+  async function fetchJson(url) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
-      const response = await fetch(throughProxy ? proxiedUrl(url) : url, {
+      const response = await fetch(proxiedUrl(url), {
         signal: controller.signal,
         cache: "no-cache",
         headers: {
@@ -302,69 +295,56 @@
   }
 
   async function searchNetease(info) {
+    if (!hasProxyUrl()) {
+      throw new Error(REQUIRED_PROXY_ERROR);
+    }
+
     const limit = clampInteger(getSetting("search_limit", 8), 1, 20);
     const query = [info.title, info.artist].filter(Boolean).join(" ");
 
-    if (hasProxyUrl()) {
-      const officialUrl = buildOfficialNeteaseUrl("/api/cloudsearch/pc", {
-        s: query,
-        type: 1,
-        offset: 0,
-        total: "false",
-        limit,
-      });
-      const data = await fetchJson(officialUrl, { throughProxy: true });
-      if (isOfficialJsonUnusable(data)) {
-        throw new Error(
-          "Official NetEase search response is unusable. Please check your CORS proxy output and exit IP.",
-        );
-      }
-      return {
-        source: "official",
-        songs: data?.result?.songs || [],
-      };
-    }
-
-    const nodeUrl = buildPublicNodeUrl("/cloudsearch", {
-      keywords: query,
+    const officialUrl = buildOfficialNeteaseUrl("/api/cloudsearch/pc", {
+      s: query,
       type: 1,
       offset: 0,
+      total: "false",
       limit,
     });
-    const data = await fetchJson(nodeUrl, { throughProxy: false });
+    const data = await fetchJson(officialUrl);
+    if (isOfficialJsonUnusable(data)) {
+      throw new Error(
+        "Official NetEase search response is unusable. Please check your CORS proxy output and exit IP.",
+      );
+    }
     return {
-      source: "public-mirror",
+      source: "official-cloudsearch-pc",
       songs: data?.result?.songs || [],
     };
   }
 
   async function fetchLyrics(songId) {
-    if (hasProxyUrl()) {
-      const officialUrl = buildOfficialNeteaseUrl("/api/song/lyric", {
-        id: songId,
-        lv: -1,
-        tv: -1,
-        kv: -1,
-        yv: -1,
-      });
-      const data = await fetchJson(officialUrl, { throughProxy: true });
-      if (isOfficialJsonUnusable(data)) {
-        throw new Error(
-          "Official NetEase lyric response is unusable. Please check your CORS proxy output and exit IP.",
-        );
-      }
-      return {
-        source: "official",
-        data,
-      };
+    if (!hasProxyUrl()) {
+      throw new Error(REQUIRED_PROXY_ERROR);
     }
 
-    const nodeUrl = buildPublicNodeUrl("/lyric/new", {
+    const officialUrl = buildOfficialNeteaseUrl("/api/song/lyric/v1", {
       id: songId,
+      cp: "false",
+      lv: 0,
+      tv: 0,
+      rv: 0,
+      kv: 0,
+      yv: 0,
+      ytv: 0,
+      yrv: 0,
     });
-    const data = await fetchJson(nodeUrl, { throughProxy: false });
+    const data = await fetchJson(officialUrl);
+    if (isOfficialJsonUnusable(data)) {
+      throw new Error(
+        "Official NetEase lyric response is unusable. Please check your CORS proxy output and exit IP.",
+      );
+    }
     return {
-      source: "public-mirror",
+      source: "official-lyric-v1",
       data,
     };
   }
@@ -821,7 +801,7 @@
           React.createElement(
             "p",
             { style: { margin: "6px 0 0" } },
-            "Default: the public NeteaseCloudMusicApi mirror at netease.happyking.top. If you fill a CORS proxy URL below, this addon switches to official NetEase Cloud Music web APIs through your proxy.",
+            "A user-provided CORS proxy is required. The addon always requests official music.163.com APIs through your proxy and no longer falls back to public mirrors.",
           ),
         ),
         React.createElement(
@@ -830,7 +810,7 @@
           React.createElement(
             "label",
             null,
-            "CORS proxy URL (optional, recommended)",
+            "CORS proxy URL (required)",
           ),
           React.createElement("input", {
             type: "text",
@@ -844,7 +824,7 @@
           React.createElement(
             "small",
             null,
-            "Leave empty to use public mirrors. Fill this to request official music.163.com APIs through your proxy. Use {url} placeholder if your proxy needs it; otherwise the encoded URL is appended after the prefix.",
+            "Required. Use {url} placeholder if your proxy needs it; otherwise the encoded official NetEase URL is appended after the prefix.",
           ),
         ),
         React.createElement(
@@ -1103,9 +1083,7 @@
         album: getCandidateAlbum(best.song),
         score: best.score.total,
         scoreReason: best.score.reason,
-        source: hasProxyUrl()
-          ? "official-api-via-cors-proxy"
-          : "happyking-neteasecloudmusicapi-mirror",
+        source: "official-api-via-cors-proxy",
         searchSource: searchResult?.source || "",
         lyricSource: lyricResult?.source || "",
       };
