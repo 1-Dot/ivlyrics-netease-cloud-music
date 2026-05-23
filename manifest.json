@@ -4,11 +4,12 @@
       "name": "NetEase Cloud Music",
       "type": "lyrics",
       "author": "1-Dot",
-      "version": "0.1.7",
-      "updated": "2026-05-22",
+      "version": "0.1.8",
+      "updated": "2026-05-24",
+      "preview": "https://raw.githubusercontent.com/1-Dot/ivLyrics-Netease-Cloud-Music/main/preview.png",
       "description": {
-        "en": "Get synced lyrics and official translated lyrics from NetEase Cloud Music.",
-        "zh-CN": "从网易云音乐获取同步歌词和官方翻译歌词。"
+        "en": "Get synced lyrics and official translated lyrics from NetEase Cloud Music. A valid CORS proxy (China IP) is required.",
+        "zh-CN": "从网易云音乐获取同步歌词和官方翻译歌词，需要有效的CORS代理（中国IP）。"
       },
       "githubUrl": "https://github.com/1-Dot/ivLyrics-Netease-Cloud-Music",
       "downloadUrl": "https://raw.githubusercontent.com/1-Dot/ivLyrics-Netease-Cloud-Music/main/Addon_Lyrics_Netease.js",

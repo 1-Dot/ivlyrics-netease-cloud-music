@@ -3,7 +3,7 @@
  *
  * @addon-type lyrics
  * @name NetEase Cloud Music
- * @version 0.1.7
+ * @version 0.1.8
  * @supports karaoke: false
  * @supports synced: true
  * @supports unsynced: true
@@ -807,11 +807,7 @@
         React.createElement(
           "div",
           { className: "ai-addon-setting" },
-          React.createElement(
-            "label",
-            null,
-            "CORS proxy URL (required)",
-          ),
+          React.createElement("label", null, "CORS proxy URL (required)"),
           React.createElement("input", {
             type: "text",
             value: proxyUrl,
